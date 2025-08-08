@@ -1,0 +1,101 @@
+version: '3.9'
+
+services:
+  db:
+    image: postgres:latest
+    restart: always
+    environment:
+      POSTGRES_DB: exam_db
+      POSTGRES_USER: exam_user
+      POSTGRES_PASSWORD: exam_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_db:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U exam_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: gunicorn your_project_name.wsgi:application --bind 0.0.0.0:8000 --workers=4 --timeout=120
+    volumes:
+      - .:/app
+      - static_volume:/app/static
+      - media_volume:/app/media
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DEBUG=0
+      DJANGO_DB_HOST=db
+      DJANGO_DB_NAME=exam_db
+      DJANGO_DB_USER=exam_user
+      DJANGO_DB_PASSWORD=exam_pass
+      DJANGO_SETTINGS_MODULE=your_project_name.settings.production
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A your_project_name worker --loglevel=info --concurrency=4
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DJANGO_DB_HOST=db
+      DJANGO_DB_NAME=exam_db
+      DJANGO_DB_USER=exam_user
+      DJANGO_DB_PASSWORD=exam_pass
+      CELERY_BROKER_URL=redis://redis:6379/0
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A your_project_name beat --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - celery
+      - redis
+    environment:
+      DJANGO_DB_HOST=db
+      DJANGO_DB_NAME=exam_db
+      DJANGO_DB_USER=exam_user
+      DJANGO_DB_PASSWORD=exam_pass
+      CELERY_BROKER_URL=redis://redis:6379/0
+
+  redis:
+    image: redis:latest
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:
+  static_volume:
+  media_volume:
